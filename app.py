@@ -587,7 +587,7 @@ function switchTuning(tab) {
     html += '<div class="tuning-row">' +
       '<span class="t-label">'+p.label+'</span>' +
       inputHtml +
-      '<div class="t-help" onclick="toggleGuide(\''+tab+'\','+i+')" title="查看微调指引">?</div>' +
+      '<div class="t-help" onclick="toggleGuide(&quot;'+tab+'&quot;,'+i+')" title="查看微调指引">?</div>' +
       '</div>';
     // guide（默认隐藏）
     html += '<div class="tuning-guide" id="guide_'+tab+'_'+i+'">' +
@@ -598,8 +598,8 @@ function switchTuning(tab) {
   });
   html += '<div class="tuning-saved" id="saved_'+tab+'">✓ 已保存，将应用于下次调用</div>';
   html += '<div class="tuning-actions">' +
-    '<button class="tuning-btn reset" onclick="resetTuning(\''+tab+'\')">重置默认</button>' +
-    '<button class="tuning-btn apply" onclick="applyTuning(\''+tab+'\')">应用微调</button>' +
+    '<button class="tuning-btn reset" onclick="resetTuning(&quot;'+tab+'&quot;)">重置默认</button>' +
+    '<button class="tuning-btn apply" onclick="applyTuning(&quot;'+tab+'&quot;)">应用微调</button>' +
     '</div>';
   document.getElementById('tuningContent').innerHTML = html;
 }
