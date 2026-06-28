@@ -82,6 +82,52 @@ async def health():
 
 
 # ────────────────────────────────────────────────────────────
+# Agent 微调配置（内存存储，生产环境落库）
+# ────────────────────────────────────────────────────────────
+TUNING_CONFIG: dict[str, str] = {}
+
+
+@app.get("/api/tuning")
+async def get_tuning():
+    """获取当前已应用的微调配置"""
+    return {"config": TUNING_CONFIG}
+
+
+class TuningRequest(BaseModel):
+    tab: str  # prompt / knowledge / workflow / review / model
+    config: dict  # {tab_key: value, ...}
+
+
+@app.post("/api/tuning")
+async def save_tuning(req: TuningRequest):
+    """保存微调配置（合并到全局，下次 chat 调用时生效）"""
+    # 记录变更历史
+    changes = []
+    for k, v in req.config.items():
+        old = TUNING_CONFIG.get(k)
+        if old != v:
+            changes.append({"key": k, "old": old, "new": v})
+        TUNING_CONFIG[k] = v
+    return {
+        "success": True,
+        "tab": req.tab,
+        "applied": req.config,
+        "changes": changes,
+        "total_configs": len(TUNING_CONFIG),
+        "message": f"已保存 {len(req.config)} 项配置，将在下次调用生效" if changes else "配置无变化",
+    }
+
+
+@app.delete("/api/tuning")
+async def reset_all_tuning():
+    """重置所有微调配置"""
+    global TUNING_CONFIG
+    count = len(TUNING_CONFIG)
+    TUNING_CONFIG = {}
+    return {"success": True, "cleared": count}
+
+
+# ────────────────────────────────────────────────────────────
 # 介绍页 HTML
 # ────────────────────────────────────────────────────────────
 HTML = """<!DOCTYPE html>
@@ -162,17 +208,42 @@ HTML = """<!DOCTYPE html>
   .state-view .v{color:#fcd34d;}
   .state-view .s{color:#a5d6ff;}
 
-  /* Tuning 面板 */
-  .tuning-tabs{display:flex;gap:0.4rem;margin-bottom:0.6rem;flex-wrap:wrap;}
-  .tuning-tab{padding:0.35rem 0.7rem;background:var(--bg3);border:1px solid var(--rule);
-    border-radius:6px;cursor:pointer;font-size:0.78rem;color:var(--muted);}
+  /* Tuning 面板（增强版） */
+  .tuning-tabs{display:flex;gap:0.4rem;margin-bottom:0.7rem;flex-wrap:wrap;}
+  .tuning-tab{padding:0.4rem 0.8rem;background:var(--bg3);border:1px solid var(--rule);
+    border-radius:6px;cursor:pointer;font-size:0.78rem;color:var(--muted);transition:all 0.2s;}
+  .tuning-tab:hover{border-color:var(--purple);color:#c4b5fd;}
   .tuning-tab.active{background:var(--purple);color:white;border-color:var(--purple);}
-  .tuning-content{background:var(--bg3);border-radius:8px;padding:0.8rem;font-size:0.8rem;min-height:120px;}
-  .tuning-content .row{display:flex;justify-content:space-between;padding:0.35rem 0;border-bottom:1px dashed var(--rule);}
-  .tuning-content .row:last-child{border-bottom:none;}
-  .tuning-content .label{color:var(--muted);}
-  .tuning-content .value{color:#fcd34d;font-family:monospace;}
-  .tuning-content .ver{font-size:0.72rem;color:var(--green);margin-left:0.4rem;}
+  .tuning-content{background:var(--bg3);border-radius:8px;padding:1rem;font-size:0.82rem;min-height:160px;}
+  .tuning-title{color:var(--purple);font-weight:700;margin-bottom:0.8rem;font-size:0.88rem;
+    display:flex;align-items:center;justify-content:space-between;}
+  .tuning-title .desc{color:var(--muted);font-size:0.72rem;font-weight:400;}
+  .tuning-row{display:grid;grid-template-columns:130px 1fr 24px;gap:0.6rem;align-items:center;
+    padding:0.55rem 0;border-bottom:1px dashed var(--rule);}
+  .tuning-row:last-of-type{border-bottom:none;}
+  .tuning-row .t-label{color:var(--muted);font-size:0.78rem;}
+  .tuning-row .t-input{background:var(--bg);color:var(--ink);border:1px solid var(--rule);
+    border-radius:5px;padding:0.35rem 0.5rem;font-size:0.78rem;font-family:inherit;width:100%;}
+  .tuning-row .t-input:focus{outline:none;border-color:var(--purple);}
+  .tuning-row select.t-input{cursor:pointer;}
+  .tuning-row .t-help{width:20px;height:20px;border-radius:50%;background:var(--bg);
+    border:1px solid var(--rule);color:var(--muted);cursor:pointer;font-size:0.7rem;
+    display:flex;align-items:center;justify-content:center;transition:all 0.2s;}
+  .tuning-row .t-help:hover{border-color:var(--accent2);color:var(--accent2);}
+  .tuning-row .t-help.active{background:var(--accent2);color:var(--bg);border-color:var(--accent2);}
+  .tuning-guide{background:var(--bg);border:1px solid var(--accent2);border-radius:6px;
+    padding:0.7rem 0.9rem;margin:0.5rem 0 0.8rem;font-size:0.76rem;color:#fcd34d;
+    display:none;line-height:1.7;}
+  .tuning-guide.show{display:block;}
+  .tuning-guide .g-title{color:var(--accent2);font-weight:700;margin-bottom:0.3rem;font-size:0.8rem;}
+  .tuning-guide .g-tip{color:var(--muted);margin-top:0.4rem;padding-top:0.4rem;border-top:1px dashed var(--rule);font-size:0.72rem;}
+  .tuning-actions{margin-top:0.8rem;display:flex;gap:0.5rem;justify-content:flex-end;}
+  .tuning-btn{padding:0.45rem 1rem;border-radius:6px;cursor:pointer;font-size:0.78rem;font-weight:600;border:none;}
+  .tuning-btn.apply{background:linear-gradient(135deg,var(--purple),var(--accent));color:white;}
+  .tuning-btn.reset{background:var(--bg);color:var(--muted);border:1px solid var(--rule);}
+  .tuning-btn:disabled{opacity:0.5;cursor:not-allowed;}
+  .tuning-saved{font-size:0.72rem;color:var(--green);margin-top:0.4rem;text-align:right;display:none;}
+  .tuning-saved.show{display:block;}
 
   /* Trace */
   .trace-box{background:var(--bg);border:1px solid var(--rule);border-radius:8px;padding:0.8rem;
@@ -354,11 +425,13 @@ HTML = """<!DOCTYPE html>
             <div class="state-view" id="stateView"><span class="s">// 等待输入...</span></div>
           </div>
           <div class="panel">
-            <div class="panel-title">🔧 Agent 微调面板（核心亮点）</div>
+            <div class="panel-title">🔧 Agent 微调面板 <span style="font-size:0.7rem;color:var(--muted);">可编辑 · 点击 ? 查看微调指引</span></div>
             <div class="tuning-tabs">
-              <div class="tuning-tab active" data-tab="recommend" onclick="switchTuning('recommend')">Recommend</div>
-              <div class="tuning-tab" data-tab="sales" onclick="switchTuning('sales')">Sales</div>
+              <div class="tuning-tab active" data-tab="prompt" onclick="switchTuning('prompt')">Prompt</div>
+              <div class="tuning-tab" data-tab="knowledge" onclick="switchTuning('knowledge')">Knowledge</div>
+              <div class="tuning-tab" data-tab="workflow" onclick="switchTuning('workflow')">Workflow</div>
               <div class="tuning-tab" data-tab="review" onclick="switchTuning('review')">Review</div>
+              <div class="tuning-tab" data-tab="model" onclick="switchTuning('model')">Model</div>
             </div>
             <div class="tuning-content" id="tuningContent"></div>
           </div>
@@ -414,48 +487,174 @@ HTML = """<!DOCTYPE html>
 </div>
 
 <script>
+// ────────────────────────────────────────────────────────────
+// 微调配置：5 大维度，每个参数带 type/options/default/guide（微调指引）
+// ────────────────────────────────────────────────────────────
 const tuningData = {
-  recommend: {
-    title: 'Recommend Agent 微调',
-    rows: [
-      {label: 'Prompt 版本', value: 'v1.2 <span class="ver">+预算约束</span>'},
-      {label: 'Chunk Size', value: '800'},
-      {label: 'Top K', value: '5'},
-      {label: 'Rerank', value: 'ON'},
-      {label: 'Workflow', value: 'Recommend → BudgetCheck → Review'},
+  prompt: {
+    title: 'Prompt 优化',
+    desc: '调整 Prompt 版本、约束与风格',
+    params: [
+      {key:'version', label:'Prompt 版本', type:'select', options:['v1.0','v1.1','v1.2','v2.0'], default:'v1.2',
+       guide:{title:'Prompt 版本管理', body:'每次微调保留版本号，便于回滚。v1.2 增加了预算约束，v2.0 增加了案例引用与异议处理。建议小步迭代，AB 测试后再全量。', tip:'优化方向：增加角色约束、增加输出格式约束、增加负面清单'}},
+      {key:'role', label:'角色设定', type:'select', options:['资深医美顾问','年轻化顾问','高端机构顾问'], default:'资深医美顾问',
+       guide:{title:'角色设定微调', body:'不同角色影响话术风格。资深顾问偏专业稳重；年轻化顾问偏亲切活力；高端机构顾问偏品质感。根据客群画像选择。', tip:'提示：可针对不同年龄段客户自动切换角色'}},
+      {key:'constraints', label:'约束条件', type:'text', default:'符合预算、合规、不承诺效果',
+       guide:{title:'约束条件微调', body:'硬性约束写入 Prompt，防止 LLM 越界。常见约束：预算上限、合规话术、不承诺效果、不对比竞品。', tip:'新增约束示例：必须引用至少1个案例、必须给出2个备选方案'}},
+      {key:'temp', label:'Temperature', type:'select', options:['0.2','0.3','0.5','0.7','0.9'], default:'0.3',
+       guide:{title:'Temperature 微调', body:'控制输出随机性。0.2-0.3 适合结构化输出（如画像抽取）；0.5-0.7 适合话术生成（有创意又稳定）；0.9+ 适合发散场景。', tip:'Sales Agent 建议 0.5-0.7，Profile Agent 建议 0.2-0.3'}},
     ]
   },
-  sales: {
-    title: 'Sales Agent 微调',
-    rows: [
-      {label: 'Prompt 版本', value: 'v2.0 <span class="ver">+案例引用</span>'},
-      {label: 'Temperature', value: '0.7'},
-      {label: 'Max Tokens', value: '300'},
-      {label: '合规过滤', value: 'strict'},
-      {label: '异议处理库', value: 'enabled'},
+  knowledge: {
+    title: 'Knowledge (RAG) 优化',
+    desc: '调整向量检索参数与知识库',
+    params: [
+      {key:'chunk_size', label:'Chunk Size', type:'select', options:['400','600','800','1000','1200'], default:'800',
+       guide:{title:'Chunk Size 微调', body:'知识库分块大小。过小（400）丢失上下文，过大（1200）召回噪声多。医美项目知识建议 800（一个项目描述刚好一块）。', tip:'优化方向：按项目自然分段，而非固定长度切分'}},
+      {key:'top_k', label:'Top K', type:'select', options:['3','5','8','10'], default:'5',
+       guide:{title:'Top K 微调', body:'检索返回的 chunk 数量。K 越大召回越多但易引入不相关内容。医美推荐场景 K=5 较合适。', tip:'配合 Rerank 使用，可适当提高 K 再二次过滤'}},
+      {key:'rerank', label:'Rerank', type:'select', options:['ON','OFF'], default:'ON',
+       guide:{title:'Rerank 微调', body:'对召回结果二次排序，提升相关性。开启后推荐准确率提升约 15-20%，但增加 200-400ms 延迟。', tip:'生产环境建议开启，对延迟敏感可关闭'}},
+      {key:'score_threshold', label:'相似度阈值', type:'select', options:['0.5','0.6','0.7','0.8'], default:'0.7',
+       guide:{title:'相似度阈值微调', body:'低于此分数的 chunk 不召回。阈值过高会漏召回，过低会引入噪声。0.7 是经验值。', tip:'若发现推荐不准，先尝试降低阈值到 0.6'}},
+      {key:'kb_source', label:'知识库来源', type:'select', options:['项目库','价格库','案例库','FAQ库','全部'], default:'全部',
+       guide:{title:'知识库来源微调', body:'可指定只检索某类知识库。Recommend Agent 用项目库+价格库；Sales Agent 用案例库；客服用FAQ库。', tip:'多库混合检索时建议加权：项目库0.5 + 案例库0.3 + 价格库0.2'}},
+    ]
+  },
+  workflow: {
+    title: 'Workflow 优化',
+    desc: '调整 Agent 执行流程与节点',
+    params: [
+      {key:'flow', label:'当前流程', type:'select', options:['标准流程','+预算检查','+二次推荐','精简流程'], default:'+预算检查',
+       guide:{title:'Workflow 流程微调', body:'标准流程：Recommend→Review。+预算检查：Recommend→BudgetCheck→Review（超预算重新推荐）。+二次推荐：Review 不通过则回到 Recommend。精简流程：跳过 Review 加速。', tip:'高客单场景务必启用预算检查；追求转化速度可用精简流程'}},
+      {key:'max_retry', label:'最大重试', type:'select', options:['0','1','2','3'], default:'1',
+       guide:{title:'最大重试微调', body:'Review 不通过时回到上游 Agent 重试的次数。0=不重试直接输出；1=重试1次；过多会增加延迟和成本。', tip:'建议 1-2 次，超过则转人工'}},
+      {key:'parallel', label:'并行执行', type:'select', options:['OFF','ON'], default:'OFF',
+       guide:{title:'并行执行微调', body:'Profile 和 NeedAnalysis 可并行执行以降低延迟。但并行后 State 合并复杂，调试难度增加。', tip:'延迟敏感场景可开启，需注意 State 字段冲突'}},
+      {key:'human_handoff', label:'人工接管阈值', type:'select', options:['0.3','0.4','0.5','0.6'], default:'0.4',
+       guide:{title:'人工接管阈值微调', body:'Review 评分低于此值时转人工。值越低越倾向自动处理，越高越倾向人工。医美高客单建议 0.4-0.5。', tip:'可按项目类别动态调整：手术类 0.5，轻医美 0.3'}},
     ]
   },
   review: {
-    title: 'Review Agent 微调',
-    rows: [
-      {label: '审核维度', value: '预算/合规/风险'},
-      {label: '预算阈值', value: '±10%'},
-      {label: '违规词库', value: '128 条'},
-      {label: '未成年拦截', value: 'ON'},
-      {label: '风险评分阈值', value: '≥60 通过'},
+    title: 'Review 审核优化',
+    desc: '调整合规/预算/风险审核规则',
+    params: [
+      {key:'budget_tolerance', label:'预算容忍度', type:'select', options:['±5%','±10%','±15%','±20%'], default:'±10%',
+       guide:{title:'预算容忍度微调', body:'推荐项目总价超出预算的比例上限。±10% 表示允许超 10%，超过则降分或重新推荐。', tip:'高客单项目建议 ±5% 严格管控，轻医美可放宽到 ±15%'}},
+      {key:'compliance_level', label:'合规等级', type:'select', options:['strict','normal','loose'], default:'strict',
+       guide:{title:'合规等级微调', body:'strict=启用全部违规词过滤+效果承诺拦截；normal=仅过滤明确违规词；loose=仅记录不拦截。医美行业建议 strict。', tip:'违规词库需定期更新，建议每月 review 一次'}},
+      {key:'minor_block', label:'未成年拦截', type:'select', options:['ON','OFF'], default:'ON',
+       guide:{title:'未成年拦截微调', body:'识别到客户未成年时强制拦截并提示需监护人签字。医美合规红线，强烈建议保持 ON。', tip:'可通过 Profile Agent 输出的 age 字段自动触发'}},
+      {key:'pass_score', label:'通过评分阈值', type:'select', options:['50','60','70','80'], default:'60',
+       guide:{title:'通过评分阈值微调', body:'Review 总分低于此值则不通过，触发重试或人工。60 是平衡点：过严影响转化，过松增加合规风险。', tip:'新上线建议 70 保守，稳定后降到 60'}},
+    ]
+  },
+  model: {
+    title: 'Model 模型优化',
+    desc: '切换 LLM 模型与参数',
+    params: [
+      {key:'model', label:'LLM 模型', type:'select', options:['qwen-max','qwen-plus','qwen-turbo','deepseek-r1'], default:'qwen-max',
+       guide:{title:'模型切换微调', body:'qwen-max：效果最好但贵慢，适合 Sales/Review；qwen-plus：性价比均衡，适合 Recommend；qwen-turbo：快且便宜，适合 Profile/NeedAnalysis；deepseek-r1：推理强，适合复杂审核。', tip:'按 Agent 重要度分配模型：核心用 max，辅助用 plus/turbo，可降本 40%+'}},
+      {key:'max_tokens', label:'Max Tokens', type:'select', options:['128','256','512','1024'], default:'256',
+       guide:{title:'Max Tokens 微调', body:'单次输出最大 token 数。话术生成建议 256-512；画像抽取 128 足够。过大会增加成本，过小会截断。', tip:'Sales Agent 话术建议 300-400 tokens'}},
+      {key:'timeout', label:'超时(秒)', type:'select', options:['5','10','15','30'], default:'15',
+       guide:{title:'超时微调', body:'LLM 调用超时时间。超时后降级到规则引擎或转人工。15 秒适合大多数场景。', tip:'网络抖动多时可提高到 30 秒，并加重试'}},
+      {key:'fallback', label:'降级策略', type:'select', options:['规则引擎','转人工','缓存上次','报错'], default:'规则引擎',
+       guide:{title:'降级策略微调', body:'LLM 不可用时的处理。规则引擎=走兜底逻辑；转人工=直接交顾问；缓存上次=用历史结果；报错=显式失败。', tip:'生产环境建议规则引擎兜底 + 告警，保证可用性'}},
     ]
   }
 };
+
+// 当前已应用的微调配置（从后端加载）
+let appliedTuning = {};
 
 function switchTuning(tab) {
   document.querySelectorAll('.tuning-tab').forEach(t => t.classList.remove('active'));
   document.querySelector('.tuning-tab[data-tab="'+tab+'"]').classList.add('active');
   const d = tuningData[tab];
-  const html = '<div style="color:var(--purple);font-weight:600;margin-bottom:0.5rem;font-size:0.85rem;">'+d.title+'</div>' +
-    d.rows.map(r => '<div class="row"><span class="label">'+r.label+'</span><span class="value">'+r.value+'</span></div>').join('');
+
+  let html = '<div class="tuning-title">'+d.title+' <span class="desc">'+d.desc+'</span></div>';
+  d.params.forEach((p, i) => {
+    const curVal = appliedTuning[tab+'_'+p.key] || p.default;
+    // input or select
+    let inputHtml;
+    if (p.type === 'select') {
+      inputHtml = '<select class="t-input" data-tab="'+tab+'" data-key="'+p.key+'">' +
+        p.options.map(o => '<option value="'+o+'"'+(o===curVal?' selected':'')+'>'+o+'</option>').join('') + '</select>';
+    } else {
+      inputHtml = '<input class="t-input" type="text" data-tab="'+tab+'" data-key="'+p.key+'" value="'+curVal+'">';
+    }
+    html += '<div class="tuning-row">' +
+      '<span class="t-label">'+p.label+'</span>' +
+      inputHtml +
+      '<div class="t-help" onclick="toggleGuide(\''+tab+'\','+i+')" title="查看微调指引">?</div>' +
+      '</div>';
+    // guide（默认隐藏）
+    html += '<div class="tuning-guide" id="guide_'+tab+'_'+i+'">' +
+      '<div class="g-title">📖 '+p.guide.title+'</div>' +
+      '<div>'+p.guide.body+'</div>' +
+      '<div class="g-tip">💡 '+p.guide.tip+'</div>' +
+      '</div>';
+  });
+  html += '<div class="tuning-saved" id="saved_'+tab+'">✓ 已保存，将应用于下次调用</div>';
+  html += '<div class="tuning-actions">' +
+    '<button class="tuning-btn reset" onclick="resetTuning(\''+tab+'\')">重置默认</button>' +
+    '<button class="tuning-btn apply" onclick="applyTuning(\''+tab+'\')">应用微调</button>' +
+    '</div>';
   document.getElementById('tuningContent').innerHTML = html;
 }
-switchTuning('recommend');
+
+function toggleGuide(tab, idx) {
+  const el = document.getElementById('guide_'+tab+'_'+idx);
+  const helpBtn = el.previousElementSibling.querySelector('.t-help');
+  el.classList.toggle('show');
+  if (helpBtn) helpBtn.classList.toggle('active');
+}
+
+async function applyTuning(tab) {
+  const inputs = document.querySelectorAll('.t-input[data-tab="'+tab+'"]');
+  const config = {};
+  inputs.forEach(inp => {
+    config[tab+'_'+inp.dataset.key] = inp.value;
+  });
+  try {
+    await fetch('/api/tuning', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tab: tab, config: config})
+    });
+    Object.assign(appliedTuning, config);
+    const saved = document.getElementById('saved_'+tab);
+    saved.classList.add('show');
+    setTimeout(() => saved.classList.remove('show'), 2500);
+  } catch(e) {
+    alert('保存失败：'+e.message);
+  }
+}
+
+function resetTuning(tab) {
+  document.querySelectorAll('.t-input[data-tab="'+tab+'"]').forEach(inp => {
+    const key = inp.dataset.key;
+    const p = tuningData[tab].params.find(x => x.key === key);
+    if (p) {
+      if (inp.tagName === 'SELECT') {
+        inp.value = p.default;
+      } else {
+        inp.value = p.default;
+      }
+    }
+  });
+}
+
+// 初始化加载已保存的微调配置
+async function loadTuning() {
+  try {
+    const resp = await fetch('/api/tuning');
+    const data = await resp.json();
+    appliedTuning = data.config || {};
+  } catch(e) {}
+  switchTuning('prompt');
+}
+loadTuning();
 
 async function sendMessage() {
   const msg = document.getElementById('msgInput').value.trim();
